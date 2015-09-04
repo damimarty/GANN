@@ -52,16 +52,20 @@ RandomList::RandomList(double max) {
 }
 
 RandomList::~RandomList() {
+	printf("RandomList\n");
 	free(array);
+	printf("RandomList\n");
 }
 
 double RandomList::RandAB(double a, double b) {
-    return ( rand()/(double)RAND_MAX ) * (b-a) + a;
+	return ( rand()/(double)RAND_MAX ) * (b-a) + a;
 }
 
 int* RandomList::GetMixedArray(void) {
 	int pickedNumber = 0;
 	int temp = 0;
+	for(int i = 0; i< size; i++)
+		array[i]=i;
 	for(int i = 0; i< size; i++){
 		pickedNumber = (int) RandAB(0,(double)size);
 		// On échange les contenus des cases i et nombre_tire
@@ -147,7 +151,7 @@ bit *numInput::getBit(int index) {
 bit **numInput::getBits(void) {
 	return b;
 }
- 
+
 //====================================================
 
 class neuron: public objectIO {
@@ -168,9 +172,13 @@ public:
 	int getGeneLen(void);
 	double *getGenes(void);
 	void setGenes(double *genes);
+	
+	// NEAT stuffs
+	void addConnexion(objectIO *neuron);
 };
 
 neuron::neuron(int s, objectIO **ios, double t) {
+	sum = 0;
 	x = ios;
 	allocWeights(s);
 	randomiseWeight();
@@ -207,7 +215,7 @@ void neuron::randomiseWeight(void) {
 double neuron::evaluate(void) {
 	sum = 0;
 	for(int i = 0; i < sz; i++)
-			sum += w[i]*(x[i]->getOutput(NULL));
+		sum += w[i]*(x[i]->getOutput(NULL));
 	return 1.0/(1.0+exp(-sum));
 }
 
@@ -234,6 +242,26 @@ void neuron::setGenes(double *genes) {
 	memcpy(w,genes,sz*sizeof(double));
 }
 
+void neuron::addConnexion(objectIO *neuron) {
+	if (x != NULL && w != NULL) {
+		x = (objectIO**) realloc (x, sizeof(objectIO*) * (sz+1));
+		if (x != NULL) {
+			x[sz] = neuron;
+		} else {printf("Neuron::addConnexion realloc of x failed\n");}
+		w = (double*) realloc (w, sizeof(double) * (sz+1));
+		if (w != NULL) {
+			w[(int)sz] = (double)rand()/(double)(RAND_MAX/2.0)-1.0;;
+		} else {printf("Neuron::addConnexion realloc of w failed\n");}
+		sz += 1;
+	} else {
+		// neuron is not connected to any neuron yet
+		sz = 1;
+		x = (objectIO**) malloc (sizeof(objectIO*) * sz);
+		x[0] = neuron;
+		w = (double*) malloc (sizeof(double) * sz);
+		randomiseWeight();
+	}	
+}
 //====================================================
 
 class network {
@@ -245,11 +273,12 @@ protected:
 public:
 
 	// Construtor
-	network(int nL, ...);
 	network(int nL, va_list ap);
+	network(int nL, int* listeNbNeur);
 	
 	// Initializer
 	void init(int nL, va_list ap);
+	void init(int nL, int* listeNbNeur);
 	
 	// Input	
 	virtual void *getInputData(void) = 0;
@@ -269,26 +298,26 @@ public:
 	int genomeSize(void);
 	double *extractGenome(bool print);
 	void setGenome(double* g);
+	
+	//NEAT stuffs
+	void insertNewNeuron(void);
 };
 
-network::network(int nL, ...) {
-	va_list ap;
-	va_start(ap, nL);
-	init(nL,ap);
-	va_end(ap);
-}
-
 network::network(int nL, va_list ap) {
-	init(nL,ap);
+	// init(nL,ap);
 }
 
-void network::init(int nL, va_list ap) {
+network::network(int nL, int* listeNbNeur) {
+	init(nL,listeNbNeur);
+}
+
+void network::init(int nL, int* listeNbNeur) {
 	genomeSz = 0;
 	nLayers = nL;
 	nPerLayer = (int*) malloc(sizeof(int)*nLayers);
 	// Apply the number per layers
 	for(int i = 0; i<nLayers; i++) {
-		nPerLayer[i] = va_arg(ap,int);
+		nPerLayer[i] = listeNbNeur[i];
 	}
 	// Allocate space for layers 
 	neurons = (neuron***) malloc(sizeof(neuron**)*nLayers);
@@ -310,11 +339,44 @@ void network::init(int nL, va_list ap) {
 	}
 }
 
+void network::insertNewNeuron(void) {
+	int targetLayer = (int) RandomList::RandAB(1,nLayers-1);
+	neurons[targetLayer] = (neuron**) realloc(neurons[targetLayer],sizeof(neuron*)*(nPerLayer[targetLayer]+1));
+	
+	// neuron birth, with no connexion
+	neurons[targetLayer][nPerLayer[targetLayer]] = new neuron(0,NULL);
+	// connexion with upstream layers
+	int nMaxConnex = 0;
+	for (int i = 0; i < targetLayer; i++) {
+		nMaxConnex += nPerLayer[i];
+	}
+	int nbConnexions = (int) RandomList::RandAB(1,nMaxConnex);
+	for (int i = 0; i<nbConnexions ; i++) {
+		int layer = (int) RandomList::RandAB(0,targetLayer-1);
+		int neuron = (int) RandomList::RandAB(0,nPerLayer[layer]);
+		neurons[targetLayer][nPerLayer[targetLayer]]->addConnexion((objectIO*) neurons[layer][neuron]);
+	} 
+	
+	// connexion with downstream layers
+	nMaxConnex = 0;
+	for (int i = targetLayer+1; i < nLayers; i++) {
+		nMaxConnex += nPerLayer[i];
+	}
+	nbConnexions = (int) RandomList::RandAB(1,nMaxConnex);
+	for (int i = 0; i<nbConnexions ; i++) {
+		int layer = (int) RandomList::RandAB(targetLayer+1,nLayers);
+		int neuron = (int) RandomList::RandAB(0,nPerLayer[layer]);
+		neurons[layer][neuron]->addConnexion((objectIO*) neurons[targetLayer][nPerLayer[targetLayer]]);
+	}
+	
+	nPerLayer[targetLayer]++;
+}
+
 void network::step(void) {
 	for(int i = 0; i<nLayers; i++) {
 		for(int j = 0; j<nPerLayer[i]; j++) {
 			neurons[i][j]->evaluate();
-		}	
+		}
 	}
 }
 
@@ -393,8 +455,7 @@ protected:
 		int b;
 	} coupleData;
 public:
-	booleanOperation(int iSz, int nLayer, ...);
-	booleanOperation(int iSz, int nLayer, va_list ap);
+	booleanOperation(int iSz, int nLayer, int* listeNbNeur);
 	void init(int iSz);
 	virtual void *getInputData(void);
 	virtual void setInputData(void*);
@@ -406,11 +467,7 @@ public:
 	virtual double error(double res) = 0;
 };
 
-booleanOperation::booleanOperation(int iSz, int nLayer, ...): network(nLayer, ...) {
-	init(iSz);
-}
-
-booleanOperation::booleanOperation(int iSz, int nLayer, va_list ap): network(nLayer, ap) {
+booleanOperation::booleanOperation(int iSz, int nLayer, int* listeNbNeur): network(nLayer, listeNbNeur) {
 	init(iSz);
 }
 
@@ -486,19 +543,21 @@ int booleanOperation::getB(void){
 
 //====================================================
 
+static int tabAsupB[] = {2,2,1};
 class AsupB: public booleanOperation {
+private:
 public:
 	AsupB();
 	virtual double error(double res);
 };
 
-AsupB::AsupB(): booleanOperation(4,3,4,5,1) { }
+AsupB::AsupB(): booleanOperation(4,3,tabAsupB) { }
 
 double AsupB::error(double res) {
 	
 	if(a>b) {	// true res is 1
 		if(res <= 0.5){ // we fail do a big error
-			return 1.0; 	
+			return 1.0;	 
 		} else {			// we do it right make a small error
 			return 0.0;
 		}
@@ -523,7 +582,7 @@ double AsupB::error(double res) {
 	/*
 	if(a>b) {	// true res is 1
 		if(res <= 0.5){ // we fail do a big error
-			return 1-res; 	
+			return 1-res;	 
 		} else {			// we do it right make a small error
 			return res;
 		}
@@ -539,13 +598,14 @@ double AsupB::error(double res) {
 
 //====================================================
 
+static int tabAandB[3] = {2,2,1};
 class AandB: public booleanOperation {
 public:
 	AandB();
 	virtual double error(double res);
 };
 
-AandB::AandB(): booleanOperation(1,3,2,2,1) { }
+AandB::AandB(): booleanOperation(1,3,tabAandB) { }
 
 double AandB::error(double res) {
 	int result = a & b;
@@ -593,6 +653,7 @@ public:
 		double pB;
 	} couple;
 	biasWheel(int sz);
+	void rebootBiasWheel();
 	virtual ~biasWheel();
 	virtual void print(void);
 	virtual void normilize(void);
@@ -618,6 +679,15 @@ biasWheel::~biasWheel() {
 	free(normProbs);
 }
 
+void biasWheel::rebootBiasWheel() {
+	curSz = 0;
+	normProbSum = 0;
+	memset(objs,NULL,sizeof(void*)*szMax);
+	memset(indexes,0,sizeof(int)*szMax);
+	memset(probs,0.0,sizeof(double)*szMax);
+	memset(normProbs,0.0,sizeof(double)*szMax);
+}
+
 void biasWheel::print() {
 	for(int i = 0; i<curSz; i++) {
 		printf("%p - %03d - %1.6f - %1.6f\n",objs[i],indexes[i],probs[i],normProbs[i]);
@@ -633,7 +703,7 @@ void biasWheel::normilize(void){
 void biasWheel::addObject(void *obj, double proba, int index) {
 	if(curSz<szMax) {
 		objs[curSz] = obj;
-		probs[curSz] = (proba);
+		probs[curSz] = proba;
 		normProbs[curSz] = (proba)*100;
 		indexes[curSz] = index;
 		normProbSum += (proba)*100;
@@ -645,7 +715,8 @@ void biasWheel::addObject(void *obj, double proba, int index) {
 }
 
 void biasWheel::elect(void **obj, double *prob, int *index) {
-	double ind = ((double)rand()/((double)RAND_MAX))*normProbSum;
+	// double ind = ((double)rand()/((double)RAND_MAX))*normProbSum;
+	double ind = RandomList::RandAB(0,normProbSum);
 	double d0 = 0;
 	int i;
 	//double d1 
@@ -683,15 +754,14 @@ void biasWheel::electCouple(couple *c) {
 
 
 //====================================================
-// 			framework to run simulation
+// framework to run simulation
 //====================================================
 
 class genetics {
-protected:
 	int nNets;					
 	network **nets;			// Networks represent the population at a given time
 	network **childNets;// Chikd represent the new population create after selection
-	double **errors;  	// Save the result of a competition at a given time
+	double **errors;	  // Save the result of a competition at a given time
 	double *meanErr;		// Save the mean error over 1 competition step
 	int compSize;				// Size of the competition (how many time we run the fitting test)
 	int genIndex;				// Generation index of the population
@@ -820,16 +890,18 @@ void genetics::sort(void) {
 }
 
 void genetics::select(int chunk, int nBiasWheel, double mutFactor, double crossOverFactor, int nCpy) {
-
+	
+	biasWheel *bw = new biasWheel(nBiasWheel);
+	RandomList *rl = new RandomList(nNets);
 	for(int it = 0; it<nNets; it+=chunk) {
-		RandomList *rl = new RandomList(nNets);
+		bw->rebootBiasWheel();
+		printf("---------it %3d\n",it);
 		int* mixedArray = rl->GetMixedArray();
-		biasWheel *bw = new biasWheel(nBiasWheel);
 		//printf("===== Selection =====\n");
 		for(int i = 0; i < nBiasWheel; i++) {
 			int ind = mixedArray[i];
 			//printf("%1.5f\n",1-meanErr[ind]);
-			bw->addObject(nets[ind],1-meanErr[ind],ind);
+			bw->addObject((void*)nets[ind],(double)(1-meanErr[ind]),ind);
 		}
 		//printf("=====================\n");
 		//bw->print();
@@ -955,9 +1027,13 @@ void genetics::select(int chunk, int nBiasWheel, double mutFactor, double crossO
 		free(selectionIndexes);
 		free(selectionProb);
 #endif
-		delete(bw);
-		delete(rl);
+
 	}
+	printf("delete rl\n");
+	delete(rl);
+	printf("delete bw\n");
+	delete(bw);
+	printf("finito\n");
 }
 
 void genetics::step(void) {
@@ -1023,6 +1099,7 @@ void biasWheelTest() {
 
 //====================================================
 
+// ligne d'appel : neat 1000 100 50 50 0.001 0.8 1
 int main(int argc, char* argv[]) {
 
 	int nNetworks = 1000;
@@ -1068,7 +1145,7 @@ int main(int argc, char* argv[]) {
 		return 0;
 	}
 	
-	srand(time(NULL));
+	// srand(time(NULL));
 	printf("neuronal network\n");
 	
 	// truncate file
@@ -1126,3 +1203,25 @@ int main(int argc, char* argv[]) {
 #endif
 	return 0;
 }
+
+// int main2(void) {
+	// int nPerlayers[5] = {1,1,1,1,1};
+	// network testNEAT(5,nPerlayers);
+	// testNEAT.print();
+	// srand(time(NULL));
+	// for (int i = 0; i < 10 ; i++) {
+		// printf("\n\n\nGeneration %d\n",i);
+		// testNEAT.insertNewNeuron();
+		// testNEAT.print();
+	// }
+// }
+
+
+
+
+
+
+
+
+
+
